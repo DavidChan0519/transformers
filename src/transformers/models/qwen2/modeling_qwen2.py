@@ -142,10 +142,10 @@ class Qwen2Attention(nn.Module):
         self.scaling = self.head_dim**-0.5
         self.attention_dropout = config.attention_dropout
         self.is_causal = True
-        self.q_proj = nn.Linear(config.hidden_size, config.num_attention_heads * self.head_dim, bias=True)
-        self.k_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * self.head_dim, bias=True)
-        self.v_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * self.head_dim, bias=True)
-        self.o_proj = nn.Linear(config.num_attention_heads * self.head_dim, config.hidden_size, bias=False)
+        self.q_proj = nn.Linear(config.hidden_size, config.num_attention_heads * self.head_dim, bias=True) # out: [batch, seq_len, num_attention_heads * head_dim]
+        self.k_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * self.head_dim, bias=True) # out: [batch, seq_len, num_key_value_heads * head_dim]
+        self.v_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * self.head_dim, bias=True) # out: [batch, seq_len, num_key_value_heads * head_dim]
+        self.o_proj = nn.Linear(config.num_attention_heads * self.head_dim, config.hidden_size, bias=False) # out: [batch, seq_len, hidden_size]
 
     def forward(
         self,
@@ -156,15 +156,15 @@ class Qwen2Attention(nn.Module):
         cache_position: Optional[torch.LongTensor] = None,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-        input_shape = hidden_states.shape[:-1]
-        hidden_shape = (*input_shape, -1, self.head_dim)
+        input_shape = hidden_states.shape[:-1] # [batch, seq_len]
+        hidden_shape = (*input_shape, -1, self.head_dim) # [batch, seq_len, -1, head_dim]
 
-        query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+        query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2) # [batch, seq_len, num_attention_heads, head_dim] -> [batch, num_attention_heads, seq_len, head_dim]
+        key_states = self.k_proj(hidden_states).view(hidden_shape).transpose(1, 2) # [batch, seq_len, num_key_value_heads, head_dim] -> [batch, num_key_value_heads, seq_len, head_dim]
+        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2) # [batch, seq_len, num_key_value_heads, head_dim] -> [batch, num_key_value_heads, seq_len, head_dim]
 
         cos, sin = position_embeddings
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin) # [batch, num_attention_heads, seq_len, head_dim], keep same as input
 
         if past_key_value is not None:
             # sin and cos are specific to RoPE models; cache_position needed for the static cache
@@ -199,10 +199,10 @@ class Qwen2Attention(nn.Module):
             scaling=self.scaling,
             sliding_window=sliding_window,  # main diff with Llama
             **kwargs,
-        )
+        ) # [batch, num_attention_heads, seq_len, head_dim], [batch, num_attention_heads, seq_len, seq_len]
 
-        attn_output = attn_output.reshape(*input_shape, -1).contiguous()
-        attn_output = self.o_proj(attn_output)
+        attn_output = attn_output.reshape(*input_shape, -1).contiguous() # [batch, seq_len, num_attention_heads * head_dim] -> [batch, seq_len, hidden_size]
+        attn_output = self.o_proj(attn_output) # [batch, seq_len, hidden_size]
         return attn_output, attn_weights
 
 
